@@ -2,13 +2,6 @@ services:
   spotiflarr:
     build:
       context: .
-      args:
-        # GH_TOKEN is REQUIRED — the SpotiFLAC fork is private. Easiest:
-        #   GH_TOKEN=$(gh auth token) docker compose build
-        GH_TOKEN: ${GH_TOKEN:-}
-        # Override these to pin a different fork or commit:
-        SPOTIFLAC_REPO: ${SPOTIFLAC_REPO:-geoffevans/SpotiFLAC-Command-Line-Interface}
-        SPOTIFLAC_REF: ${SPOTIFLAC_REF:-main}
     container_name: spotiflarr
     restart: unless-stopped
     ports:

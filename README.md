@@ -1,8 +1,8 @@
 # Spotiflarr
 
-Bridges a private fork of [jelte1/SpotiFLAC-Command-Line-Interface](https://github.com/jelte1/SpotiFLAC-Command-Line-Interface)
-(retrofitted with Spotbye proxy endpoints from the SpotiFLAC-Next AppImage)
-into Lidarr.
+Bridges the [jelte1 SpotiFLAC CLI](https://github.com/jelte1/SpotiFLAC-Command-Line-Interface)
+(vendored under `spotiflac-cli/`, retrofitted with Spotbye proxy
+endpoints extracted from the SpotiFLAC-Next AppImage) into Lidarr.
 
 Polls Lidarr's wanted-missing list every 3 hours, picks 5 albums, resolves
 each to a Spotify album URL via MusicBrainz url-rels, runs the SpotiFLAC
@@ -12,9 +12,8 @@ the albums Spotiflarr can't (no Spotify URL on MB, deny-listed, etc.).
 
 ## What's in the container
 
-- The Python SpotiFLAC CLI cloned from `SPOTIFLAC_REPO` at image build
-  time (private fork; needs a GitHub token — see below). Re-run
-  `docker compose build` to refresh.
+- The Python SpotiFLAC CLI vendored at `spotiflac-cli/`. To pull
+  upstream fixes, sync the directory and rebuild.
 - Python orchestrator + tiny Flask UI on port 8182.
 - State in `/data/state.json`, config overrides in `/data/config.json`.
 - `ffmpeg` (the CLI uses it to remux Tidal manifests and decrypt Amazon Music).
@@ -27,7 +26,7 @@ cd /home/docker/spotiflarr
 
 # scp the contents of this directory in:
 #   Dockerfile, docker-compose.yml, .env.example, requirements.txt,
-#   orchestrator.py, templates/
+#   orchestrator.py, templates/, spotiflac-cli/
 
 cp .env.example .env
 nano .env       # set LIDARR_API_KEY (required); rest can stay defaults
@@ -37,9 +36,7 @@ nano .env       # set LIDARR_API_KEY (required); rest can stay defaults
 #   /pool/media/downloads/music/spotiflac:/output
 # That host path doesn't need to exist yet — Docker will create it.
 
-# Build needs a GitHub token because the SpotiFLAC fork is private. If
-# you've already run `gh auth login` on this host, just:
-GH_TOKEN=$(gh auth token) docker compose build
+docker compose build
 docker compose up -d
 docker compose logs -f
 ```
@@ -108,19 +105,25 @@ For each of up to N albums Lidarr is missing:
   no_spotify_url so failed albums get reconsidered.
 - `/healthz` — JSON liveness probe.
 
-## Pinning the SpotiFLAC fork
+## Updating the vendored SpotiFLAC CLI
 
-Default build args clone `geoffevans/SpotiFLAC-Command-Line-Interface`
-at `main`. To pin a commit or point at a different fork, override at
-build time:
+The CLI lives at `spotiflac-cli/` in this repo. To pull upstream
+changes from `jelte1/SpotiFLAC-Command-Line-Interface`:
 
 ```bash
-GH_TOKEN=$(gh auth token) \
-  SPOTIFLAC_REF=<commit-sha> \
-  SPOTIFLAC_REPO=<owner>/<repo> \
-  docker compose build
+# One-time: clone upstream somewhere outside this repo
+git clone https://github.com/jelte1/SpotiFLAC-Command-Line-Interface.git /tmp/spotiflac-upstream
+
+# Sync — exclude .git/ and our patched files (tidalDL.py, qobuzDL.py)
+# so the Spotbye retrofits aren't blown away. Diff first, commit if happy.
+rsync -a --exclude='.git' --exclude='.github' \
+      --exclude='SpotiFLAC/tidalDL.py' --exclude='SpotiFLAC/qobuzDL.py' \
+      /tmp/spotiflac-upstream/ spotiflac-cli/
+git diff --stat
+git commit -am "sync spotiflac-cli from upstream"
 ```
 
-The `GH_TOKEN` ends up in image layers. For a homelab that's fine; if
-you'd rather it didn't, mint a fine-grained PAT scoped read-only to
-the one repo and use that instead of `gh auth token`.
+Then `docker compose build`. No tokens involved.
+
+Then rebuild with `docker compose build`. No tokens involved — single
+private repo, single source of truth.

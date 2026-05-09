@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "SpotiFLAC"
+version = "0.1.4"
+description = "Get Spotify tracks in true FLAC from Tidal, Qobuz & Amazon Music — no account required."
+authors = [
+  { name="ShuKurenais"}
+]
+readme = "README.md"
+requires-python = ">=3.9"
+
+dependencies = [
+  "requests~=2.32.3",
+  "mutagen~=1.47.0",
+  "pyotp~=2.9.0"
+]
+
+[project.urls]
+"Repository" = "https://github.com/ShuShuzinhuu/SpotiFLAC-Module-Version"
