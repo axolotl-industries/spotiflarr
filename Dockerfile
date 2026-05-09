@@ -20,6 +20,12 @@ RUN apt-get update \
 RUN git clone "$SPOTIFLAC_REPO" /src \
  && cd /src \
  && git checkout "$SPOTIFLAC_REF" \
+ # Patch: the upstream CLI hardcodes Tidal as the source. Inject an
+ # SPOTIFLAC_SERVICE env var read so we can pick qobuz / amazon / tidal
+ # at runtime. The original line is `r.Service = "tidal"` inside an
+ # `if r.Service == "" {}` block; we replace it with an env-fallback.
+ && sed -i 's|r\.Service = "tidal"|if v := os.Getenv("SPOTIFLAC_SERVICE"); v != "" { r.Service = v } else { r.Service = "tidal" }|' main.go \
+ && grep -q 'SPOTIFLAC_SERVICE' main.go || (echo "service patch failed" && exit 1) \
  && go build -tags headless -trimpath -ldflags="-s -w" -o /spotiflac . \
  && test -x /spotiflac \
  && /spotiflac --help > /dev/null 2>&1 \

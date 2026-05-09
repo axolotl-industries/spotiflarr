@@ -61,6 +61,10 @@ DEFAULTS = {
     "albums_per_run": 5,
     "max_retries": 5,
     "spotiflac_concurrency": 3,
+    # Source for SpotiFLAC's audio fetch. Upstream defaults to tidal but
+    # the Tidal APIs are routinely 403/timing out — qobuz is the most
+    # reliable mirror at the moment. Valid: "qobuz", "amazon", "tidal".
+    "spotiflac_service": "qobuz",
     "ntfy_url": os.environ.get("NTFY_URL", ""),
     "ntfy_token": os.environ.get("NTFY_TOKEN", ""),
     "ntfy_topic": os.environ.get("NTFY_TOPIC", "docker-alerts"),
@@ -259,7 +263,8 @@ def safe_dirname(s: str) -> str:
     return ("".join("_" if c in bad else c for c in s)).strip() or "Unknown"
 
 
-def run_spotiflac(spotify_url: str, output_dir: Path, concurrency: int) -> tuple[bool, str]:
+def run_spotiflac(spotify_url: str, output_dir: Path,
+                  concurrency: int, service: str) -> tuple[bool, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         "spotiflac",
@@ -267,7 +272,10 @@ def run_spotiflac(spotify_url: str, output_dir: Path, concurrency: int) -> tuple
         "-c", str(concurrency),
         spotify_url,
     ]
-    log.info(f"  spotiflac → {output_dir.name}")
+    # SPOTIFLAC_SERVICE is read by our patched main.go; valid values are
+    # tidal / qobuz / amazon. Default in DEFAULTS is qobuz.
+    env = {**os.environ, "SPOTIFLAC_SERVICE": service}
+    log.info(f"  spotiflac → {output_dir.name} (service={service})")
 
     # Stream stdout/stderr line-by-line so the orchestrator log shows real
     # progress instead of going silent for 30s–several minutes per album.
@@ -278,6 +286,7 @@ def run_spotiflac(spotify_url: str, output_dir: Path, concurrency: int) -> tuple
             stderr=subprocess.STDOUT,   # merge so order is preserved
             text=True,
             bufsize=1,                  # line-buffered
+            env=env,
         )
     except FileNotFoundError:
         return False, "spotiflac binary not found in container"
@@ -386,7 +395,11 @@ def cycle(cfg: dict, state: State) -> None:
         output_dir = OUTPUT_DIR / folder_name
 
         state.total_attempts += 1
-        ok, msg = run_spotiflac(spotify_url, output_dir, cfg["spotiflac_concurrency"])
+        ok, msg = run_spotiflac(
+            spotify_url, output_dir,
+            cfg["spotiflac_concurrency"],
+            cfg.get("spotiflac_service", "qobuz"),
+        )
         if not ok:
             log.warning(f"  fail: {msg}")
             state.attempts[mbid] = state.attempts.get(mbid, 0) + 1
@@ -493,6 +506,9 @@ def settings():
                 cfg[key] = int(request.form.get(key, cfg[key]))
             except ValueError:
                 pass
+        svc = request.form.get("spotiflac_service", "").strip().lower()
+        if svc in {"qobuz", "amazon", "tidal"}:
+            cfg["spotiflac_service"] = svc
         save_config(cfg)
         log.info("config updated via UI")
         return redirect(url_for("settings"))

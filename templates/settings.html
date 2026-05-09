@@ -58,6 +58,14 @@
     <label>SpotiFLAC concurrency (-c)</label>
     <input type="number" name="spotiflac_concurrency" value="{{ cfg.spotiflac_concurrency }}" min="1" max="10">
     <div class="hint">Tracks to download in parallel per album.</div>
+
+    <label>SpotiFLAC source</label>
+    <select name="spotiflac_service">
+      {% for s in ["qobuz", "amazon", "tidal"] %}
+      <option value="{{ s }}" {% if cfg.spotiflac_service == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+    <div class="hint">Where SpotiFLAC fetches the audio. Tidal's third-party APIs are usually rate-limited or 403-ing — qobuz is the most reliable mirror.</div>
   </fieldset>
 
   <fieldset>
