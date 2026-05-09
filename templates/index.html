@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spotiflarr</title>
+<style>
+  body { font: 14px/1.4 -apple-system, system-ui, sans-serif; max-width: 960px; margin: 24px auto; padding: 0 16px; color: #222; }
+  h1 { margin: 0 0 4px; }
+  .sub { color: #888; margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .card { border: 1px solid #ddd; border-radius: 6px; padding: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 16px; }
+  .kv { display: grid; grid-template-columns: 140px 1fr; gap: 4px 12px; }
+  .kv .k { color: #666; }
+  .kv .v { font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td, th { text-align: left; padding: 4px 8px; border-bottom: 1px solid #eee; }
+  th { color: #888; font-weight: normal; }
+  .ok { color: #2a7; }
+  .bad { color: #c33; }
+  .skip { color: #888; }
+  .nav a { margin-right: 12px; }
+  pre { background: #111; color: #ddd; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 12px; max-height: 320px; }
+  form { display: inline; }
+  button { padding: 6px 12px; border: 1px solid #888; background: #f8f8f8; border-radius: 4px; cursor: pointer; }
+  button:hover { background: #eee; }
+</style>
+</head>
+<body>
+
+<h1>Spotiflarr</h1>
+<div class="sub">SpotiFLAC → Lidarr orchestrator</div>
+
+<div class="nav">
+  <a href="/">status</a>
+  <a href="/settings">settings</a>
+  <form method="post" action="/run-now"><button type="submit">run now</button></form>
+  <form method="post" action="/state/clear-denied" onsubmit="return confirm('Reset deny-list and no-Spotify-URL records?')">
+    <button type="submit">clear deny-list</button>
+  </form>
+</div>
+
+<br>
+<div class="grid">
+
+  <div class="card">
+    <h2>Status</h2>
+    <div class="kv">
+      <div class="k">spotiflac binary</div>
+      <div class="v">{% if spotiflac_ok %}<span class="ok">found</span>{% else %}<span class="bad">missing</span>{% endif %}</div>
+
+      <div class="k">last cycle</div>
+      <div class="v">{{ state.last_cycle_at or "never" }}</div>
+
+      <div class="k">last result</div>
+      <div class="v">{{ state.last_cycle_result or "—" }}</div>
+
+      <div class="k">total attempts</div>
+      <div class="v">{{ state.total_attempts }}</div>
+
+      <div class="k">total successes</div>
+      <div class="v">{{ state.total_successes }}</div>
+
+      <div class="k">deny-listed</div>
+      <div class="v">{{ state.denied|length }}</div>
+
+      <div class="k">no Spotify URL</div>
+      <div class="v">{{ state.no_spotify_url|length }}</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Config (effective)</h2>
+    <div class="kv">
+      <div class="k">Lidarr URL</div><div class="v">{{ cfg.lidarr_url }}</div>
+      <div class="k">API key set</div><div class="v">{{ "yes" if cfg.lidarr_api_key else "no" }}</div>
+      <div class="k">output path (Lidarr view)</div><div class="v">{{ cfg.lidarr_output_path }}</div>
+      <div class="k">interval</div><div class="v">{{ cfg.interval_seconds }}s ({{ "%.1f"|format(cfg.interval_seconds / 3600) }}h)</div>
+      <div class="k">albums/run</div><div class="v">{{ cfg.albums_per_run }}</div>
+      <div class="k">max retries</div><div class="v">{{ cfg.max_retries }}</div>
+      <div class="k">spotiflac -c</div><div class="v">{{ cfg.spotiflac_concurrency }}</div>
+    </div>
+  </div>
+
+</div>
+
+<br>
+
+<div class="card">
+  <h2>Recent activity</h2>
+  {% if state.history %}
+  <table>
+    <tr><th>time</th><th>artist</th><th>album</th><th>result</th><th>msg</th></tr>
+    {% for h in state.history|reverse %}
+    <tr>
+      <td>{{ h.time }}</td>
+      <td>{{ h.artist }}</td>
+      <td>{{ h.album }}</td>
+      <td>
+        {% if h.result == 'success' %}<span class="ok">success</span>
+        {% elif h.result == 'no_spotify_url' %}<span class="skip">no spotify url</span>
+        {% else %}<span class="bad">{{ h.result }}</span>{% endif %}
+      </td>
+      <td>{{ h.msg }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="skip">nothing yet — wait for a cycle, or hit "run now"</div>
+  {% endif %}
+</div>
+
+<br>
+
+<div class="card">
+  <h2>Recent log</h2>
+  <pre>{% for line in log_lines %}{{ line }}
+{% endfor %}</pre>
+</div>
+
+</body>
+</html>

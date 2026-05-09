@@ -1,0 +1,29 @@
+services:
+  spotiflarr:
+    build:
+      context: .
+      # Bump SPOTIFLAC_REF to a specific commit if you want pinning:
+      # args:
+      #   SPOTIFLAC_REF: <commit-sha>
+    container_name: spotiflarr
+    restart: unless-stopped
+    ports:
+      - "8181:8181"
+    environment:
+      TZ: Europe/London
+      # Bootstrap config — only LIDARR_URL/LIDARR_API_KEY needed at first run.
+      # Everything else is editable via the web UI at http://<host>:8181/settings
+      LIDARR_URL: ${LIDARR_URL:-http://192.168.1.34:8686}
+      LIDARR_API_KEY: ${LIDARR_API_KEY:-}
+      # The path Lidarr's container/LXC sees for the volume mounted at /output.
+      # Used in DownloadedAlbumsScan calls so Lidarr knows where to look.
+      LIDARR_OUTPUT_PATH: ${LIDARR_OUTPUT_PATH:-/mnt/bigboi/media/downloads/music/spotiflac}
+      NTFY_URL: ${NTFY_URL:-}
+      NTFY_TOKEN: ${NTFY_TOKEN:-}
+      NTFY_TOPIC: ${NTFY_TOPIC:-docker-alerts}
+    volumes:
+      - ./data:/data
+      # Bind the host path Lidarr reads from. Adjust the LEFT side to the
+      # actual on-disk location; RIGHT side stays /output (matches what
+      # SpotiFLAC writes to inside the container).
+      - /pool/media/downloads/music/spotiflac:/output
