@@ -57,7 +57,11 @@
 
     <label>SpotiFLAC concurrency (-c)</label>
     <input type="number" name="spotiflac_concurrency" value="{{ cfg.spotiflac_concurrency }}" min="1" max="10">
-    <div class="hint">Tracks to download in parallel per album.</div>
+    <div class="hint">Tracks to download in parallel per album. Higher = more chance of song.link 429s. Start at 1.</div>
+
+    <label>SpotiFLAC delay between tracks (ms)</label>
+    <input type="number" name="spotiflac_delay_ms" value="{{ cfg.spotiflac_delay_ms }}" min="0" max="60000">
+    <div class="hint">Pause between track requests. 2000ms is a safe default; bump to 5000+ if you're still seeing rate-limit failures.</div>
 
     <label>SpotiFLAC source</label>
     <select name="spotiflac_service">

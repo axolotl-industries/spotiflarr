@@ -60,7 +60,12 @@ DEFAULTS = {
     "interval_seconds": 10800,   # 3 hours
     "albums_per_run": 5,
     "max_retries": 5,
-    "spotiflac_concurrency": 3,
+    # SpotiFLAC's metadata lookup goes through song.link, which rate-limits
+    # aggressively. Concurrency 1 + delay 2s keeps us under the threshold
+    # for a free-tier IP. Bump if you've routed through a VPN with a clean
+    # IP, drop further (e.g. delay 5s) if you're still seeing 429s.
+    "spotiflac_concurrency": 1,
+    "spotiflac_delay_ms": 2000,
     # Source for SpotiFLAC's audio fetch. Upstream defaults to tidal but
     # the Tidal APIs are routinely 403/timing out — qobuz is the most
     # reliable mirror at the moment. Valid: "qobuz", "amazon", "tidal".
@@ -264,18 +269,19 @@ def safe_dirname(s: str) -> str:
 
 
 def run_spotiflac(spotify_url: str, output_dir: Path,
-                  concurrency: int, service: str) -> tuple[bool, str]:
+                  concurrency: int, delay_ms: int, service: str) -> tuple[bool, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         "spotiflac",
         "-o", str(output_dir),
         "-c", str(concurrency),
+        "-delay", f"{max(delay_ms, 0)}ms",
         spotify_url,
     ]
     # SPOTIFLAC_SERVICE is read by our patched main.go; valid values are
     # tidal / qobuz / amazon. Default in DEFAULTS is qobuz.
     env = {**os.environ, "SPOTIFLAC_SERVICE": service}
-    log.info(f"  spotiflac → {output_dir.name} (service={service})")
+    log.info(f"  spotiflac → {output_dir.name} (service={service}, c={concurrency}, delay={delay_ms}ms)")
 
     # Stream stdout/stderr line-by-line so the orchestrator log shows real
     # progress instead of going silent for 30s–several minutes per album.
@@ -398,6 +404,7 @@ def cycle(cfg: dict, state: State) -> None:
         ok, msg = run_spotiflac(
             spotify_url, output_dir,
             cfg["spotiflac_concurrency"],
+            cfg.get("spotiflac_delay_ms", 2000),
             cfg.get("spotiflac_service", "qobuz"),
         )
         if not ok:
@@ -501,7 +508,8 @@ def settings():
                     "ntfy_url", "ntfy_token", "ntfy_topic"):
             cfg[key] = request.form.get(key, cfg[key]).strip()
         for key in ("interval_seconds", "albums_per_run",
-                    "max_retries", "spotiflac_concurrency"):
+                    "max_retries", "spotiflac_concurrency",
+                    "spotiflac_delay_ms"):
             try:
                 cfg[key] = int(request.form.get(key, cfg[key]))
             except ValueError:

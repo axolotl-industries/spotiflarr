@@ -78,7 +78,7 @@
       <div class="k">interval</div><div class="v">{{ cfg.interval_seconds }}s ({{ "%.1f"|format(cfg.interval_seconds / 3600) }}h)</div>
       <div class="k">albums/run</div><div class="v">{{ cfg.albums_per_run }}</div>
       <div class="k">max retries</div><div class="v">{{ cfg.max_retries }}</div>
-      <div class="k">spotiflac -c</div><div class="v">{{ cfg.spotiflac_concurrency }}</div>
+      <div class="k">spotiflac -c / -delay</div><div class="v">{{ cfg.spotiflac_concurrency }} / {{ cfg.spotiflac_delay_ms }}ms</div>
       <div class="k">audio source</div><div class="v">{{ cfg.spotiflac_service }}</div>
     </div>
   </div>
