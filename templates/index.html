@@ -46,7 +46,7 @@
   <div class="card">
     <h2>Status</h2>
     <div class="kv">
-      <div class="k">spotiflac binary</div>
+      <div class="k">spotiflac CLI</div>
       <div class="v">{% if spotiflac_ok %}<span class="ok">found</span>{% else %}<span class="bad">missing</span>{% endif %}</div>
 
       <div class="k">last cycle</div>
@@ -78,8 +78,7 @@
       <div class="k">interval</div><div class="v">{{ cfg.interval_seconds }}s ({{ "%.1f"|format(cfg.interval_seconds / 3600) }}h)</div>
       <div class="k">albums/run</div><div class="v">{{ cfg.albums_per_run }}</div>
       <div class="k">max retries</div><div class="v">{{ cfg.max_retries }}</div>
-      <div class="k">spotiflac -c / -delay</div><div class="v">{{ cfg.spotiflac_concurrency }} / {{ cfg.spotiflac_delay_ms }}ms</div>
-      <div class="k">audio source</div><div class="v">{{ cfg.spotiflac_service }}</div>
+      <div class="k">audio source(s)</div><div class="v">{{ cfg.spotiflac_service }}</div>
     </div>
   </div>
 

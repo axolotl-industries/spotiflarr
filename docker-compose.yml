@@ -2,17 +2,21 @@ services:
   spotiflarr:
     build:
       context: .
-      # Bump SPOTIFLAC_REF to a specific commit if you want pinning:
-      # args:
-      #   SPOTIFLAC_REF: <commit-sha>
+      args:
+        # GH_TOKEN is REQUIRED — the SpotiFLAC fork is private. Easiest:
+        #   GH_TOKEN=$(gh auth token) docker compose build
+        GH_TOKEN: ${GH_TOKEN:-}
+        # Override these to pin a different fork or commit:
+        SPOTIFLAC_REPO: ${SPOTIFLAC_REPO:-geoffevans/SpotiFLAC-Command-Line-Interface}
+        SPOTIFLAC_REF: ${SPOTIFLAC_REF:-main}
     container_name: spotiflarr
     restart: unless-stopped
     ports:
-      - "8181:8181"
+      - "8182:8182"
     environment:
       TZ: Europe/London
       # Bootstrap config — only LIDARR_URL/LIDARR_API_KEY needed at first run.
-      # Everything else is editable via the web UI at http://<host>:8181/settings
+      # Everything else is editable via the web UI at http://<host>:8182/settings
       LIDARR_URL: ${LIDARR_URL:-http://192.168.1.34:8686}
       LIDARR_API_KEY: ${LIDARR_API_KEY:-}
       # The path Lidarr's container/LXC sees for the volume mounted at /output.

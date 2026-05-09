@@ -8,13 +8,13 @@ Runs in a Docker container alongside Soularr. Each cycle:
   3. For up to ALBUMS_PER_RUN albums:
      a. Resolve MB Release Group → Spotify album URL via MusicBrainz url-rels
      b. If no URL: mark no_spotify_url (Soularr can still try)
-     c. Otherwise: shell out to `spotiflac -o /output/<album-folder>/ <url>`
+     c. Otherwise: shell out to `python /opt/spotiflac-cli/launcher.py <url> /output/<album-folder>/`
      d. POST DownloadedAlbumsScan to Lidarr pointed at the album folder
      e. On success: clear retry counter
      f. On failure: increment, deny-list at MAX_RETRIES
   4. Sleep INTERVAL_SECONDS, repeat
 
-Tiny Flask UI on :8181 for status + editable config. Config persisted to
+Tiny Flask UI on :8182 for status + editable config. Config persisted to
 /data/config.json (env vars are bootstrap defaults; UI saves override).
 """
 
@@ -24,7 +24,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -60,16 +59,12 @@ DEFAULTS = {
     "interval_seconds": 10800,   # 3 hours
     "albums_per_run": 5,
     "max_retries": 5,
-    # SpotiFLAC's metadata lookup goes through song.link, which rate-limits
-    # aggressively. Concurrency 1 + delay 2s keeps us under the threshold
-    # for a free-tier IP. Bump if you've routed through a VPN with a clean
-    # IP, drop further (e.g. delay 5s) if you're still seeing 429s.
-    "spotiflac_concurrency": 1,
-    "spotiflac_delay_ms": 2000,
-    # Source for SpotiFLAC's audio fetch. Upstream defaults to tidal but
-    # the Tidal APIs are routinely 403/timing out — qobuz is the most
-    # reliable mirror at the moment. Valid: "qobuz", "amazon", "tidal".
-    "spotiflac_service": "qobuz",
+    # Source(s) for the audio fetch — passed to launcher.py --service.
+    # Space-separated list, tried in order until one delivers FLACs.
+    # Valid: "qobuz", "tidal", "amazon", "deezer". The Spotbye-retrofitted
+    # fork makes qobuz/tidal the most reliable; amazon and deezer kept as
+    # last-ditch fallbacks.
+    "spotiflac_service": "qobuz tidal",
     "ntfy_url": os.environ.get("NTFY_URL", ""),
     "ntfy_token": os.environ.get("NTFY_TOKEN", ""),
     "ntfy_topic": os.environ.get("NTFY_TOPIC", "docker-alerts"),
@@ -268,20 +263,28 @@ def safe_dirname(s: str) -> str:
     return ("".join("_" if c in bad else c for c in s)).strip() or "Unknown"
 
 
-def run_spotiflac(spotify_url: str, output_dir: Path,
-                  concurrency: int, delay_ms: int, service: str) -> tuple[bool, str]:
+SPOTIFLAC_LAUNCHER = "/opt/spotiflac-cli/launcher.py"
+
+
+def run_spotiflac(spotify_url: str, output_dir: Path, service: str) -> tuple[bool, str, Optional[Path]]:
+    """Run the SpotiFLAC CLI. Returns (ok, message, flac_dir).
+
+    The Python CLI creates `<output_dir>/<spotify-album-name>/` for album
+    URLs and writes FLACs into that subfolder. We return that subfolder
+    so the caller can point Lidarr's DownloadedAlbumsScan at it directly
+    (the scan command doesn't recurse).
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
+    # service is space-separated list ("qobuz tidal"); split into argv.
+    services = service.split() or ["qobuz"]
     cmd = [
-        "spotiflac",
-        "-o", str(output_dir),
-        "-c", str(concurrency),
-        "-delay", f"{max(delay_ms, 0)}ms",
+        "python3", "-u", SPOTIFLAC_LAUNCHER,
         spotify_url,
+        str(output_dir),
+        "--service", *services,
     ]
-    # SPOTIFLAC_SERVICE is read by our patched main.go; valid values are
-    # tidal / qobuz / amazon. Default in DEFAULTS is qobuz.
-    env = {**os.environ, "SPOTIFLAC_SERVICE": service}
-    log.info(f"  spotiflac → {output_dir.name} (service={service}, c={concurrency}, delay={delay_ms}ms)")
+    env = dict(os.environ)
+    log.info(f"  spotiflac → {output_dir.name} (services={services})")
 
     # Stream stdout/stderr line-by-line so the orchestrator log shows real
     # progress instead of going silent for 30s–several minutes per album.
@@ -295,7 +298,7 @@ def run_spotiflac(spotify_url: str, output_dir: Path,
             env=env,
         )
     except FileNotFoundError:
-        return False, "spotiflac binary not found in container"
+        return False, "spotiflac launcher.py not found in container", None
 
     last_lines: deque[str] = deque(maxlen=10)
     deadline = time.time() + 1800   # 30 min cap on a single album
@@ -308,20 +311,30 @@ def run_spotiflac(spotify_url: str, output_dir: Path,
                 last_lines.append(line)
             if time.time() > deadline:
                 proc.kill()
-                return False, "spotiflac timed out (>30 min)"
+                return False, "spotiflac timed out (>30 min)", None
         proc.wait(timeout=10)
     except Exception as e:
         proc.kill()
-        return False, f"spotiflac stream error: {e}"
+        return False, f"spotiflac stream error: {e}", None
 
     if proc.returncode != 0:
         tail = " | ".join(list(last_lines)[-3:])
-        return False, f"spotiflac rc={proc.returncode}: {tail[:300]}"
+        return False, f"spotiflac rc={proc.returncode}: {tail[:300]}", None
 
     flacs = list(output_dir.rglob("*.flac"))
     if not flacs:
-        return False, "spotiflac succeeded but no .flac landed"
-    return True, f"got {len(flacs)} track(s)"
+        return False, "spotiflac succeeded but no .flac landed", None
+
+    # All FLACs *should* live in a single subfolder for an album URL. If
+    # multiple parents show up (shouldn't happen for an album, but a
+    # playlist could spread tracks across artist folders), use the deepest
+    # common parent under output_dir as the scan target.
+    parents = {f.parent.resolve() for f in flacs}
+    if len(parents) == 1:
+        flac_dir = parents.pop()
+    else:
+        flac_dir = output_dir.resolve()
+    return True, f"got {len(flacs)} track(s)", flac_dir
 
 
 # ─── ntfy ───────────────────────────────────────────────────────────────────
@@ -401,10 +414,8 @@ def cycle(cfg: dict, state: State) -> None:
         output_dir = OUTPUT_DIR / folder_name
 
         state.total_attempts += 1
-        ok, msg = run_spotiflac(
+        ok, msg, flac_dir = run_spotiflac(
             spotify_url, output_dir,
-            cfg["spotiflac_concurrency"],
-            cfg.get("spotiflac_delay_ms", 2000),
             cfg.get("spotiflac_service", "qobuz"),
         )
         if not ok:
@@ -424,11 +435,22 @@ def cycle(cfg: dict, state: State) -> None:
             })
             continue
 
-        # Success at SpotiFLAC level — hand off to Lidarr
-        lidarr_path = f"{cfg['lidarr_output_path'].rstrip('/')}/{folder_name}"
+        # Success at SpotiFLAC level — hand off to Lidarr.
+        # Translate the container-local FLAC dir to Lidarr's view by
+        # swapping the OUTPUT_DIR prefix for cfg.lidarr_output_path.
+        # DownloadedAlbumsScan doesn't recurse — point it directly at the
+        # folder containing .flac files, not the parent.
+        try:
+            rel = (flac_dir or output_dir).resolve().relative_to(OUTPUT_DIR.resolve())
+        except ValueError:
+            # flac_dir somehow escaped /output — fall back to the original
+            # behaviour (parent dir, may miss the FLACs but at least won't
+            # blow up the cycle).
+            rel = Path(folder_name)
+        lidarr_path = f"{cfg['lidarr_output_path'].rstrip('/')}/{rel.as_posix()}"
         try:
             cmd_id = lidarr_trigger_scan(cfg, lidarr_path)
-            log.info(f"  Lidarr scan queued (cmd {cmd_id})")
+            log.info(f"  Lidarr scan queued at {lidarr_path} (cmd {cmd_id})")
         except Exception as e:
             log.error(f"  scan trigger failed: {e}")
             state.history.append({
@@ -492,7 +514,7 @@ RUN_NOW = threading.Event()
 def index():
     cfg = load_config()
     state = load_state()
-    spotiflac_ok = bool(shutil.which("spotiflac"))
+    spotiflac_ok = Path(SPOTIFLAC_LAUNCHER).is_file()
     return render_template(
         "index.html",
         cfg=cfg, state=state, spotiflac_ok=spotiflac_ok,
@@ -507,16 +529,19 @@ def settings():
         for key in ("lidarr_url", "lidarr_api_key", "lidarr_output_path",
                     "ntfy_url", "ntfy_token", "ntfy_topic"):
             cfg[key] = request.form.get(key, cfg[key]).strip()
-        for key in ("interval_seconds", "albums_per_run",
-                    "max_retries", "spotiflac_concurrency",
-                    "spotiflac_delay_ms"):
+        for key in ("interval_seconds", "albums_per_run", "max_retries"):
             try:
                 cfg[key] = int(request.form.get(key, cfg[key]))
             except ValueError:
                 pass
-        svc = request.form.get("spotiflac_service", "").strip().lower()
-        if svc in {"qobuz", "amazon", "tidal"}:
-            cfg["spotiflac_service"] = svc
+        # Service is a space-separated list passed straight to launcher.py
+        # --service. Validate each token, drop garbage. If empty, fall back
+        # to existing config so a misclick doesn't wipe the setting.
+        valid = {"qobuz", "amazon", "tidal", "deezer"}
+        raw = request.form.get("spotiflac_service", "").strip().lower()
+        tokens = [t for t in raw.split() if t in valid]
+        if tokens:
+            cfg["spotiflac_service"] = " ".join(tokens)
         save_config(cfg)
         log.info("config updated via UI")
         return redirect(url_for("settings"))
@@ -542,20 +567,20 @@ def clear_denied():
 
 @app.route("/healthz")
 def healthz():
-    return {"ok": True, "spotiflac": bool(shutil.which("spotiflac"))}
+    return {"ok": True, "spotiflac": Path(SPOTIFLAC_LAUNCHER).is_file()}
 
 
 # ─── Entrypoint ─────────────────────────────────────────────────────────────
 
 def main() -> int:
     log.info("starting spotiflarr")
-    if not shutil.which("spotiflac"):
-        log.error("spotiflac binary not on PATH — image broken? rebuild")
+    if not Path(SPOTIFLAC_LAUNCHER).is_file():
+        log.error(f"{SPOTIFLAC_LAUNCHER} missing — image broken? rebuild")
     threading.Thread(target=loop_forever, daemon=True).start()
     # Flask production-ish server. Single worker, threading enabled for the UI.
     from werkzeug.serving import make_server
-    server = make_server("0.0.0.0", 8181, app, threaded=True)
-    log.info("UI on :8181")
+    server = make_server("0.0.0.0", 8182, app, threaded=True)
+    log.info("UI on :8182")
     server.serve_forever()
     return 0
 

@@ -1,44 +1,36 @@
-# Stage 1 — build SpotiFLAC headless from the Nizarberyan fork.
+# Single-stage build now — the original Go-binary stage is gone.
 #
-# We use Nizarberyan/SpotiFLAC instead of upstream afkarxyz/SpotiFLAC
-# because upstream has stripped CLI/headless support (no more headless.go
-# or build-tag gating). The fork still ships it and the README's
-# `go build -tags headless` invocation actually produces a working binary.
+# We've forked jelte1/SpotiFLAC-Command-Line-Interface (Python) and
+# retrofitted it with Spotbye proxy endpoints extracted from the
+# SpotiFLAC-Next AppImage. That fork lives at SPOTIFLAC_REPO and is
+# expected to be private — the build needs a GitHub token to clone it.
 #
-# go.mod in the fork requires Go 1.25, so use a matching base image.
-# Override SPOTIFLAC_REPO/SPOTIFLAC_REF in compose if you want a different
-# fork or a pinned commit.
-FROM golang:1.25-bookworm AS spotiflac-builder
-
-ARG SPOTIFLAC_REPO=https://github.com/Nizarberyan/SpotiFLAC.git
-ARG SPOTIFLAC_REF=main
-
-RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-
-RUN git clone "$SPOTIFLAC_REPO" /src \
- && cd /src \
- && git checkout "$SPOTIFLAC_REF" \
- # Patch: the upstream CLI hardcodes Tidal as the source. Inject an
- # SPOTIFLAC_SERVICE env var read so we can pick qobuz / amazon / tidal
- # at runtime. The original line is `r.Service = "tidal"` inside an
- # `if r.Service == "" {}` block; we replace it with an env-fallback.
- && sed -i 's|r\.Service = "tidal"|if v := os.Getenv("SPOTIFLAC_SERVICE"); v != "" { r.Service = v } else { r.Service = "tidal" }|' main.go \
- && grep -q 'SPOTIFLAC_SERVICE' main.go || (echo "service patch failed" && exit 1) \
- && go build -tags headless -trimpath -ldflags="-s -w" -o /spotiflac . \
- && test -x /spotiflac \
- && /spotiflac --help > /dev/null 2>&1 \
- && echo "spotiflac built OK ($(stat -c %s /spotiflac) bytes)"
-
-# Stage 2 — slim Python runtime for the orchestrator + Flask UI.
+# Build with:
+#   GH_TOKEN=$(gh auth token) docker compose build
+#
+# (compose passes GH_TOKEN through as a build arg.)
 FROM python:3.11-slim
 
+ARG SPOTIFLAC_REPO=geoffevans/SpotiFLAC-Command-Line-Interface
+ARG SPOTIFLAC_REF=main
+ARG GH_TOKEN
+
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tini \
+ && apt-get install -y --no-install-recommends \
+        ca-certificates tini ffmpeg git \
  && rm -rf /var/lib/apt/lists/*
 
-COPY --from=spotiflac-builder /spotiflac /usr/local/bin/spotiflac
+# Clone the private fork. Token is required at build time. Using
+# x-access-token:<TOKEN> is GitHub's preferred PAT format. The token DOES
+# end up in image layers/history — fine for a homelab image that never
+# leaves your network. Use a read-only fine-grained PAT scoped to this
+# one repo if you're paranoid (gh auth token's default scopes are wider).
+RUN test -n "$GH_TOKEN" || (echo "GH_TOKEN build arg is required" && exit 1) \
+ && git clone "https://x-access-token:${GH_TOKEN}@github.com/${SPOTIFLAC_REPO}.git" /opt/spotiflac-cli \
+ && cd /opt/spotiflac-cli \
+ && git checkout "$SPOTIFLAC_REF" \
+ && rm -rf /opt/spotiflac-cli/.git \
+ && echo "spotiflac-cli cloned ($(ls /opt/spotiflac-cli | wc -l) entries)"
 
 WORKDIR /app
 COPY requirements.txt .
@@ -47,10 +39,10 @@ COPY orchestrator.py .
 COPY templates/ ./templates/
 
 # /data: state.json, config.json overrides
-# /output: where SpotiFLAC writes; mount this to the path Lidarr can read
+# /output: where the CLI writes; mount this to the path Lidarr can read
 VOLUME ["/data", "/output"]
 
-EXPOSE 8181
+EXPOSE 8182
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python3", "-u", "orchestrator.py"]

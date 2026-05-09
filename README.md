@@ -1,19 +1,23 @@
 # Spotiflarr
 
-Bridges [SpotiFLAC](https://github.com/afkarxyz/SpotiFLAC) into Lidarr.
+Bridges a private fork of [jelte1/SpotiFLAC-Command-Line-Interface](https://github.com/jelte1/SpotiFLAC-Command-Line-Interface)
+(retrofitted with Spotbye proxy endpoints from the SpotiFLAC-Next AppImage)
+into Lidarr.
 
 Polls Lidarr's wanted-missing list every 3 hours, picks 5 albums, resolves
-each to a Spotify album URL via MusicBrainz url-rels, runs SpotiFLAC to
-fetch the FLAC, then triggers `DownloadedAlbumsScan` so Lidarr imports
-into the artist tree. Runs alongside Soularr — Soularr handles the
-albums Spotiflarr can't (no Spotify URL on MB, deny-listed, etc.).
+each to a Spotify album URL via MusicBrainz url-rels, runs the SpotiFLAC
+CLI to fetch the FLACs, then triggers `DownloadedAlbumsScan` so Lidarr
+imports into the artist tree. Runs alongside Soularr — Soularr handles
+the albums Spotiflarr can't (no Spotify URL on MB, deny-listed, etc.).
 
 ## What's in the container
 
-- `spotiflac` — built from upstream `afkarxyz/SpotiFLAC` headless mode at
-  image build time. Re-run `docker compose build` to refresh.
-- Python orchestrator + tiny Flask UI on port 8181.
+- The Python SpotiFLAC CLI cloned from `SPOTIFLAC_REPO` at image build
+  time (private fork; needs a GitHub token — see below). Re-run
+  `docker compose build` to refresh.
+- Python orchestrator + tiny Flask UI on port 8182.
 - State in `/data/state.json`, config overrides in `/data/config.json`.
+- `ffmpeg` (the CLI uses it to remux Tidal manifests and decrypt Amazon Music).
 
 ## Install on LXC 100
 
@@ -33,17 +37,19 @@ nano .env       # set LIDARR_API_KEY (required); rest can stay defaults
 #   /pool/media/downloads/music/spotiflac:/output
 # That host path doesn't need to exist yet — Docker will create it.
 
-docker compose build
+# Build needs a GitHub token because the SpotiFLAC fork is private. If
+# you've already run `gh auth login` on this host, just:
+GH_TOKEN=$(gh auth token) docker compose build
 docker compose up -d
 docker compose logs -f
 ```
 
 First-run logs should show:
 - `starting spotiflarr`
-- `UI on :8181`
+- `UI on :8182`
 - `cycle: N wanted, 5 this run`
 
-Open `http://<LXC-100-IP>:8181/` for the status page. Settings page
+Open `http://<LXC-100-IP>:8182/` for the status page. Settings page
 at `/settings` lets you edit any of the runtime values without rebuilding.
 
 ## What it does, per cycle
@@ -55,9 +61,9 @@ For each of up to N albums Lidarr is missing:
    under the group and check their url-rels too. If still nothing, mark
    `no_spotify_url` and move on — Soularr's path is unaffected.
 
-2. **Fetch.** Shell out to `spotiflac -o /output/<Artist - Album>/ <url>`.
-   SpotiFLAC tries Tidal → Qobuz → Amazon Music in order until something
-   delivers FLACs.
+2. **Fetch.** Shell out to `python /opt/spotiflac-cli/launcher.py <url>
+   /output/<Artist - Album>/ --service qobuz tidal`. The CLI walks the
+   service list in order until one delivers FLACs.
 
 3. **Import.** POST `DownloadedAlbumsScan` to Lidarr with the album folder
    path (Lidarr's view, set via `LIDARR_OUTPUT_PATH`). Lidarr matches by
@@ -73,9 +79,11 @@ For each of up to N albums Lidarr is missing:
 - **MB url-rel coverage is patchy.** Big-name releases usually have
   Spotify links populated; obscure stuff often doesn't. Expect a healthy
   `no_spotify_url` count — that's not a bug, it's MB completeness.
-- **SpotiFLAC's audio sources are reverse-engineered third-party APIs**
-  (hifi-api, dabmusic.xyz, squid.wtf, doubledouble.top, lucida.to). They
-  WILL break occasionally. Rebuild the image to pick up upstream fixes.
+- **SpotiFLAC's audio sources are reverse-engineered third-party APIs.**
+  The fork prefers Spotbye proxies (`*.spotbye.qzz.io`) extracted from
+  the SpotiFLAC-Next AppImage; older mirrors (dab.yeet.su, dabmusic.xyz,
+  squid.wtf, qqdl.site) are kept as fallbacks but mostly dead. Rebuild
+  the image to pull the fork's `main` and pick up endpoint patches.
 - **Quality profile gating.** Whatever SpotiFLAC delivers (mostly 16/44
   from Tidal/Qobuz, sometimes 24-bit on Qobuz HiRes) needs to be allowed
   by your Lidarr quality profile, or imports will fail with "Not an
@@ -84,7 +92,7 @@ For each of up to N albums Lidarr is missing:
   grab the same album in the same window, Soularr's import will fail
   silently because Lidarr already has the file. Wasted bandwidth, no
   damage.
-- **Public exposure.** Don't put :8181 behind Cloudflare/Authelia unless
+- **Public exposure.** Don't put :8182 behind Cloudflare/Authelia unless
   you genuinely need it remote — there's no auth on the UI itself. LAN
   access only is the right default.
 
@@ -100,17 +108,19 @@ For each of up to N albums Lidarr is missing:
   no_spotify_url so failed albums get reconsidered.
 - `/healthz` — JSON liveness probe.
 
-## Pinning SpotiFLAC
+## Pinning the SpotiFLAC fork
 
-Default Dockerfile builds upstream `main`. To pin to a specific commit
-(reproducibility, or to dodge a regression), uncomment the build args
-in `docker-compose.yml`:
+Default build args clone `geoffevans/SpotiFLAC-Command-Line-Interface`
+at `main`. To pin a commit or point at a different fork, override at
+build time:
 
-```yaml
-build:
-  context: .
-  args:
-    SPOTIFLAC_REF: <commit-sha>
+```bash
+GH_TOKEN=$(gh auth token) \
+  SPOTIFLAC_REF=<commit-sha> \
+  SPOTIFLAC_REPO=<owner>/<repo> \
+  docker compose build
 ```
 
-Then `docker compose build`.
+The `GH_TOKEN` ends up in image layers. For a homelab that's fine; if
+you'd rather it didn't, mint a fine-grained PAT scoped read-only to
+the one repo and use that instead of `gh auth token`.
