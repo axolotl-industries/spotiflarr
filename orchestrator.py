@@ -268,17 +268,41 @@ def run_spotiflac(spotify_url: str, output_dir: Path, concurrency: int) -> tuple
         spotify_url,
     ]
     log.info(f"  spotiflac → {output_dir.name}")
+
+    # Stream stdout/stderr line-by-line so the orchestrator log shows real
+    # progress instead of going silent for 30s–several minutes per album.
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-    except subprocess.TimeoutExpired:
-        return False, "spotiflac timed out (>30 min)"
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,   # merge so order is preserved
+            text=True,
+            bufsize=1,                  # line-buffered
+        )
     except FileNotFoundError:
         return False, "spotiflac binary not found in container"
-    if r.returncode != 0:
-        msg = (r.stderr or r.stdout or "no output").strip().splitlines()
-        tail = " | ".join(msg[-3:])
-        return False, f"spotiflac rc={r.returncode}: {tail[:300]}"
-    # Verify we actually got files
+
+    last_lines: deque[str] = deque(maxlen=10)
+    deadline = time.time() + 1800   # 30 min cap on a single album
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip()
+            if line:
+                log.info(f"  [spotiflac] {line}")
+                last_lines.append(line)
+            if time.time() > deadline:
+                proc.kill()
+                return False, "spotiflac timed out (>30 min)"
+        proc.wait(timeout=10)
+    except Exception as e:
+        proc.kill()
+        return False, f"spotiflac stream error: {e}"
+
+    if proc.returncode != 0:
+        tail = " | ".join(list(last_lines)[-3:])
+        return False, f"spotiflac rc={proc.returncode}: {tail[:300]}"
+
     flacs = list(output_dir.rglob("*.flac"))
     if not flacs:
         return False, "spotiflac succeeded but no .flac landed"
